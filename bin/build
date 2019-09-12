@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+layers_dir="${1:?}"
+home_dir=${layers_dir}/home
+buildpack_dir=$(cd $(dirname $0)/..; pwd)
+
+# create a puppeteer cache layer
+home_dir="${home_dir}"
+mkdir -p $home_dir
+
+# parse and derive params
+function error() {
+  echo " !     $*" >&2
+  exit 1
+}
+
+function topic() {
+  echo "-----> $*"
+}
+
+function indent() {
+  c='s/^/       /'
+  case $(uname) in
+    Darwin) sed -l "$c";;
+    *)      sed -u "$c";;
+  esac
+}
+
+function status() {
+  local color="\033[0;35m"
+  local no_color="\033[0m"
+  echo -e "\n${color}[${1:-""}]${no_color}"
+}
+
+status "Puppeteer Cloud Native Buildpack"
+echo "Version $(cat $buildpack_dir/buildpack.toml | grep -m 1 version | sed -e 's/version = //g' | xargs)"
+
+packages="gconf-service libasound2 libatk1.0-0 libatk-bridge2.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgcc1 libgconf-2-4 libgdk-pixbuf2.0-0 libglib2.0-0 libgtk-3-0 libnspr4 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 ca-certificates fonts-liberation libappindicator1 libnss3 lsb-release xdg-utils wget libcairo-gobject2 libxinerama1 libgtk2.0-0 libpangoft2-1.0-0 libthai0 libpixman-1-0 libxcb-render0 libharfbuzz0b libdatrie1 libgraphite2-3"
+
+apt_cache_dir="${home_dir}/apt/cache"
+apt_state_dir="${home_dir}/apt/state"
+
+# The cache and state directories can be cached so only create and load them up if they don't exist
+if [ ! -d "$apt_cache_dir" ] || [ ! -d "$apt_state_dir" ]; then
+  echo "cache = true" > "${home_dir}.toml"
+
+  topic "Updating apt package cache"
+  mkdir -p "${apt_cache_dir}/archives/partial" "${apt_state_dir}/lists/partial"
+
+  apt_options="-o debug::nolocking=true -o dir::cache=$apt_cache_dir -o dir::state=$apt_state_dir"
+  apt_flags="--allow-downgrades --allow-remove-essential --allow-change-held-packages"
+
+  apt-get $apt_options update | indent
+
+  for package in $packages; do
+    if [[ $package == *deb ]]; then
+      package_name=$(basename $package .deb)
+      package_file=$apt_cache_dir/archives/$package_name.deb
+
+      topic "Fetching $package"
+      curl -s -L -z $package_file -o $package_file $package 2>&1 | indent
+    else
+      topic "Fetching .debs for $package"
+      apt-get $apt_options -y $apt_flags -d install --reinstall $package | indent
+    fi
+  done
+fi
+
+# The app directory is typically /workspace/
+app_dir=$(pwd)
+mkdir -p "${app_dir}/.apt"
+
+for deb in $(ls -1 $apt_cache_dir/archives/*.deb); do
+  topic "Installing $(basename $deb)"
+  dpkg -x $deb $app_dir/.apt/
+done
+
+topic "Setting up environment variables for launch and subsequent buildpacks to be able to reference the installed libraries"
+profile_dir="${layers_dir}/profile"
+echo "launch = true" > "${profile_dir}.toml"
+
+declare -A env_vars
+env_vars["LD_LIBRARY_PATH"]="$app_dir/.apt/usr/lib/x86_64-linux-gnu:$app_dir/.apt/usr/lib/i386-linux-gnu:$app_dir/.apt/usr/lib"
+env_vars["LIBRARY_PATH"]="$app_dir/.apt/usr/lib/x86_64-linux-gnu:$app_dir/.apt/usr/lib/i386-linux-gnu:$app_dir/.apt/usr/lib"
+env_vars["INCLUDE_PATH"]="$app_dir/.apt/usr/include:$app_dir/.apt/usr/include/x86_64-linux-gnu"
+env_vars["CPATH"]=env_vars["INCLUDE_PATH"]
+env_vars["CPPPATH"]=env_vars["INCLUDE_PATH"]
+env_vars["PKG_CONFIG_PATH"]="$app_dir/.apt/usr/lib/x86_64-linux-gnu/pkgconfig:$app_dir/.apt/usr/lib/i386-linux-gnu/pkgconfig:$app_dir/.apt/usr/lib/pkgconfig"
+
+mkdir -p "${profile_dir}/env.build" "${profile_dir}/env"
+
+for var_name in ${!env_vars[@]}; do
+  # Only the LD_LIBRARY_PATH is useful for launch all of the other environment variables are only useful during the build
+  env_build_dir=$([ "$var_name" = "LD_LIBRARY_PATH" ] && echo "env" || echo "env.build")
+
+  echo "Creating ${profile_dir}/$env_build_dir/${var_name} with the value: ${env_vars[${var_name}]}" | indent
+  echo ${env_vars[${var_name}]} > "${profile_dir}/$env_build_dir/${var_name}"
+done
+
+topic "Rewrite installed package config files to point to their actual directory"
+find $app_dir/.apt -type f -ipath '*/pkgconfig/*.pc' | xargs --no-run-if-empty -n 1 sed -i -e 's!^prefix=\(.*\)$!prefix='"$app_dir"'/.apt\1!g'

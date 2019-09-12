@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# bin/detect <build-dir>
+set -eo pipefail
 
-echo "Puppeteer"
 exit 0
