@@ -2,7 +2,7 @@
 [buildpack]
 id = "salesforce.puppeteer"
 name = "Puppeteer Cloud Native Buildpack"
-version = "1.2.6"
+version = "1.2.0"
 
 # Stacks that the buildpack will work with
 [[stacks]]
