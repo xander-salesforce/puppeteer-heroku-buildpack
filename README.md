@@ -1,6 +1,7 @@
-# puppeteer-cloud-native-buildpack
+# puppeteer-heroku-buildpack
 
-**This fork is a cloud native buildpack conversion of the jontewks buildpack, find out more about cloud native buildpacks at https://buildpacks.io**
+**This fork is a cloud native buildpack conversion of the jontewks buildpack.**
+Find out more about cloud native buildpacks at https://buildpacks.io
 
 ## Issues
 
