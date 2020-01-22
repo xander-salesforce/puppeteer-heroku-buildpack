@@ -8,7 +8,7 @@ install-buildpack:
 	@bash bin/install
 
 package: clean
-	@tar cvzf puppeteer-cloud-native-buildpack-$(VERSION).tgz bin/ buildpack.toml README.md LICENSE
+	@tar cvzf puppeteer-cloud-native-buildpack-$(VERSION).tgz bin/ buildpack.toml README.md LICENSE fonts/
 
 clean:
 	@rm -f puppeteer-cloud-native-buildpack-$(VERSION).tgz
